@@ -1,6 +1,7 @@
+use color_eyre::eyre::eyre;
 use itertools::Itertools;
 use std::time::Duration;
-use trippy::core::{Builder, PortDirection, Protocol};
+use trippy::core::{Builder, Hop as TrippyHop, PortDirection, Protocol};
 use trippy::dns::{Config, DnsResolver, Resolver};
 
 pub struct TraceData {
@@ -60,18 +61,14 @@ pub fn traceroute(hostname: &str) -> color_eyre::Result<TraceData> {
     let pausemecs = 100;
     let port_direction = PortDirection::new_fixed_src(port);
     let resolver = DnsResolver::start(Config::default())?;
+
     let addrs: Vec<_> = resolver
         .lookup(hostname)
-        .map_err(|_| color_eyre::eyre::eyre!(format!("traceroute: unknown host {}", hostname)))?
+        .map_err(|_| eyre!(format!("traceroute: unknown host {}", hostname)))?
         .into_iter()
         .collect();
     let addr = match addrs.as_slice() {
-        [] => {
-            return Err(color_eyre::eyre::eyre!(
-                "traceroute: unknown host {}",
-                hostname
-            ))
-        }
+        [] => return Err(eyre!("traceroute: unknown host {}", hostname)),
         [addr] => *addr,
         [addr, ..] => {
             println!("traceroute: Warning: {hostname} has multiple addresses; using {addr}");
@@ -97,11 +94,21 @@ pub fn traceroute(hostname: &str) -> color_eyre::Result<TraceData> {
 
     let snapshot = &tracer.snapshot();
     if let Some(err) = snapshot.error() {
-        return Err(color_eyre::eyre::eyre!("error: {err}"));
+        return Err(eyre!("error: {err}"));
     }
 
+    Ok(process_hops(hostname, resolver, tracer, snapshot.hops()))
+}
+
+pub fn process_hops(
+    hostname: &str,
+    resolver: DnsResolver,
+    tracer: trippy::core::Tracer,
+    snapshot_hops: &[TrippyHop],
+) -> TraceData {
     let mut hops = Vec::new();
-    for hop in snapshot.hops() {
+
+    for hop in snapshot_hops {
         let ttl = hop.ttl();
         let samples: String = hop
             .samples()
@@ -136,7 +143,8 @@ pub fn traceroute(hostname: &str) -> color_eyre::Result<TraceData> {
             });
         }
     }
-    Ok(TraceData {
+
+    TraceData {
         summary: format!(
             "Traceroute to {} ({}), {} hops max, {} byte packets",
             &hostname,
@@ -145,5 +153,5 @@ pub fn traceroute(hostname: &str) -> color_eyre::Result<TraceData> {
             tracer.packet_size().0
         ),
         hops,
-    })
+    }
 }
